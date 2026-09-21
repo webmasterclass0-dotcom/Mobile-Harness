@@ -117,7 +117,7 @@ object PhoneControlServer {
                 ?: return
             val context = appContext
             if (context == null) {
-                respond(client, 503, errJson("control server is stopping"))
+                respond(client, 503, errJson("control server is stopping").toString())
                 return
             }
 

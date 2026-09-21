@@ -90,6 +90,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarves.mh.BuildConfig
+import com.jarves.mh.control.PhoneControlActivity
 import com.jarves.mh.data.ApiKeyInfo
 import com.jarves.mh.model.AgentKind
 import com.jarves.mh.model.DEEPSEEK_HARNESS_PROVIDERS
@@ -106,7 +107,7 @@ import com.jarves.mh.ui.theme.AppThemeMode
 import com.jarves.mh.ui.theme.PocketOrange
 import kotlinx.coroutines.launch
 
-private enum class SettingsSection { APPEARANCE, TOOLS, RUNTIME, UPDATE_CHANNEL }
+private enum class SettingsSection { APPEARANCE, TOOLS, RUNTIME, PHONE, UPDATE_CHANNEL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -383,6 +384,27 @@ fun SettingsScreen(
                         onSave = onSetDebugUpdateManifestUrl,
                         onClear = onClearDebugUpdateManifestUrl,
                     )
+                }
+            }
+
+            item {
+                SettingsAccordion(
+                    title = "Phone control",
+                    subtitle = "Let the coding agent tap, swipe and read the screen",
+                    icon = Icons.Default.SmartToy,
+                    expanded = expanded == SettingsSection.PHONE,
+                    onClick = { toggle(SettingsSection.PHONE) },
+                ) {
+                    Text(
+                        "Optional, no root required: the agent gets a local control server (gestures, typing, screenshots, UI tree, app launch). Enable the master switch, then turn on the accessibility service once from Phone control settings.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = { context.startActivity(Intent(context, PhoneControlActivity::class.java)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Open phone control settings") }
                 }
             }
 

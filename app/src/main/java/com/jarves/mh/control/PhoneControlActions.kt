@@ -137,13 +137,17 @@ object PhoneControlActions {
             val process = ProcessBuilder(args).start()
             val stdout = ByteArrayOutputStream()
             val stderr = ByteArrayOutputStream()
-            pump(process.inputStream, stdout)
-            pump(process.errorStream, stderr)
+            val outPump = pump(process.inputStream, stdout)
+            val errPump = pump(process.errorStream, stderr)
             val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
             if (!finished) {
                 process.destroyForcibly()
                 return err("command timed out after ${timeoutMs}ms")
             }
+            // Drain the pump threads before reading the buffers, otherwise the
+            // tail of the output can be lost while the process has already exited.
+            outPump.join()
+            errPump.join()
             JSONObject()
                 .put("ok", true)
                 .put("exit", process.exitValue())
@@ -152,10 +156,13 @@ object PhoneControlActions {
         }.getOrElse { err(it.message ?: "shell failed") }
     }
 
-    private fun pump(source: java.io.InputStream, target: ByteArrayOutputStream) {
-        Thread {
+    private fun pump(source: java.io.InputStream, target: ByteArrayOutputStream): Thread {
+        val thread = Thread {
             runCatching { source.copyTo(target) }
-        }.also { it.isDaemon = true }.start()
+        }
+        thread.isDaemon = true
+        thread.start()
+        return thread
     }
 
     // ---- helpers --------------------------------------------------------

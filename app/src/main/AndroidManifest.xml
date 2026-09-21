@@ -58,11 +58,11 @@
         <!-- Agent phone-control: settings screen and accessibility service. -->
         <activity
             android:name=".control.PhoneControlActivity"
-            android:exported="false"
+            android:exported="true"
             android:theme="@style/Theme.PocketDev" />
         <service
             android:name=".control.PhoneControlService"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/phone_control_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
