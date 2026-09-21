@@ -1,0 +1,205 @@
+#!/usr/bin/env node
+// phone-mcp — minimal Model Context Protocol (stdio) server that exposes the
+// Android phone control API as tools for Claude Code / other MCP clients.
+//
+// Claude Code inside Mobile Harness already ships Node.js, so this file needs
+// no dependencies: it speaks newline-delimited JSON-RPC on stdin/stdout and
+// forwards tool calls to the app's loopback control server via fetch().
+//
+// Try it interactively:
+//     node scripts/phone-mcp
+// Wire it into Claude Code (or any MCP client) with a config like:
+//     { "mcpServers": { "phone": { "command": "/usr/local/bin/phone-mcp" } } }
+
+"use strict";
+
+const HOST = process.env.MH_PHONE_HOST || "127.0.0.1";
+const PORT = process.env.MH_PHONE_PORT || "8765";
+const TOKEN = process.env.MH_PHONE_TOKEN || "";
+const BASE = `http://${HOST}:${PORT}`;
+
+const TOOLS = [
+  {
+    name: "phone_ui",
+    description: "Return the current UI hierarchy of the foreground app as JSON (elements with bounds, text, ids).",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "phone_tap",
+    description: "Tap on the screen. Provide either x/y coordinates, or text / resourceId of a visible element.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "number", description: "x coordinate" },
+        y: { type: "number", description: "y coordinate" },
+        text: { type: "string", description: "substring of the element text or content description" },
+        resourceId: { type: "string", description: "view resource id, e.g. com.app:id/btn" },
+      },
+    },
+  },
+  {
+    name: "phone_longpress",
+    description: "Long-press at coordinates (default 600ms).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "number" }, y: { type: "number" },
+        durationMs: { type: "number" },
+      },
+      required: ["x", "y"],
+    },
+  },
+  {
+    name: "phone_swipe",
+    description: "Swipe (or scroll) from (x1,y1) to (x2,y2) over durationMs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x1: { type: "number" }, y1: { type: "number" },
+        x2: { type: "number" }, y2: { type: "number" },
+        durationMs: { type: "number" },
+      },
+      required: ["x1", "y1", "x2", "y2"],
+    },
+  },
+  {
+    name: "phone_type",
+    description: "Type text into the currently focused editable field.",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+    },
+  },
+  {
+    name: "phone_key",
+    description: "Press a system key: home, back, recents, notifications, quick_settings, power_dialog, lock_screen, screenshot.",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "phone_open_app",
+    description: "Launch an app by package name (e.g. com.whatsapp).",
+    inputSchema: {
+      type: "object",
+      properties: { package: { type: "string" } },
+      required: ["package"],
+    },
+  },
+  {
+    name: "phone_apps",
+    description: "List installed apps that have a launcher activity.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "phone_screenshot",
+    description: "Capture the current screen (PNG, base64). Requires Android 11+.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "phone_shell",
+    description: "Run a command in the app's own sandbox (am, dumpsys, pm, ...). Same privileges as the app.",
+    inputSchema: {
+      type: "object",
+      properties: { args: { type: "array", items: { type: "string" } } },
+      required: ["args"],
+    },
+  },
+];
+
+async function http(method, path, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (TOKEN) headers["X-Access-Token"] = TOKEN;
+  const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let text = "";
+  try { text = await res.text(); } catch (_) { /* empty */ }
+  let json;
+  try { json = JSON.parse(text); } catch (_) { json = { ok: false, error: text || `HTTP ${res.status}` }; }
+  return json;
+}
+
+function textResult(text, isError = false) {
+  return { content: [{ type: "text", text }], isError };
+}
+
+async function callTool(name, args) {
+  args = args || {};
+  switch (name) {
+    case "phone_ui": return textResult(JSON.stringify(await http("GET", "/ui")));
+    case "phone_apps": return textResult(JSON.stringify(await http("GET", "/apps")));
+    case "phone_screenshot": return textResult(JSON.stringify(await http("GET", "/screenshot")));
+    case "phone_tap":
+      return textResult(JSON.stringify(await http("POST", "/tap", args)));
+    case "phone_longpress":
+      return textResult(JSON.stringify(await http("POST", "/longpress", args)));
+    case "phone_swipe":
+      return textResult(JSON.stringify(await http("POST", "/swipe", args)));
+    case "phone_type":
+      return textResult(JSON.stringify(await http("POST", "/type", args)));
+    case "phone_key":
+      return textResult(JSON.stringify(await http("POST", "/key", { key: args.name })));
+    case "phone_open_app":
+      return textResult(JSON.stringify(await http("POST", "/open", { package: args.package })));
+    case "phone_shell":
+      return textResult(JSON.stringify(await http("POST", "/shell", { args: args.args || [] })));
+    default:
+      return textResult(`unknown tool: ${name}`, true);
+  }
+}
+
+const rl = require("readline").createInterface({ input: process.stdin, terminal: false });
+
+rl.on("line", (line) => {
+  line = line.trim();
+  if (!line) return;
+  let msg;
+  try { msg = JSON.parse(line); } catch (_) { return; }
+  if (msg.method === "notifications/initialized") return;
+
+  let result = Promise.resolve({});
+  switch (msg.method) {
+    case "initialize":
+      result = Promise.resolve({
+        protocolVersion: "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "phone-control", version: "1.0.0" },
+      });
+      break;
+    case "ping":
+      result = Promise.resolve({});
+      break;
+    case "tools/list":
+      result = Promise.resolve({ tools: TOOLS });
+      break;
+    case "tools/call": {
+      const name = msg.params && msg.params.name;
+      const args = msg.params && (msg.params.arguments || msg.params.input);
+      result = callTool(name, args);
+      break;
+    }
+    case "tools/list_changed":
+      result = Promise.resolve({});
+      break;
+    default:
+      if (msg.id !== undefined) {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `method not found: ${msg.method}` },
+        }) + "\n");
+      }
+      return;
+  }
+
+  if (msg.id === undefined) return; // notification
+  result.then((r) => {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: r }) + "\n");
+  }).catch((e) => {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(e) },
+    }) + "\n");
+  });
+});
+
+rl.on("close", () => process.exit(0));

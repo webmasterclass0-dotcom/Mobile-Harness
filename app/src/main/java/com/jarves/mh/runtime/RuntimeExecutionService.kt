@@ -29,6 +29,9 @@ class RuntimeExecutionService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannels(this)
+        // Agent phone-control: keep the local control server alive while the
+        // runtime service is up (it no-ops unless the feature is enabled).
+        com.jarves.mh.control.PhoneControlServer.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -144,6 +147,7 @@ class RuntimeExecutionService : Service() {
 
     override fun onDestroy() {
         releaseWakeLock()
+        com.jarves.mh.control.PhoneControlServer.stop()
         super.onDestroy()
     }
 

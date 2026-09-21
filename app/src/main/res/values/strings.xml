@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Mobile Harness</string>
+    <string name="phone_control_label">Phone control (agent access)</string>
+    <string name="phone_accessibility_description">Allows the AI coding agent to tap, swipe, type text, open apps, take screenshots and read the screen, after you enable it.</string>
 </resources>

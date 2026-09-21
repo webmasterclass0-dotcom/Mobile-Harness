@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# phone — control the Android device from inside the Mobile Harness Linux runtime.
+#
+# The app exposes a tiny loopback HTTP server (default 127.0.0.1:8765) and
+# injects MH_PHONE_PORT / MH_PHONE_TOKEN into every agent session, so from the
+# agent's terminal you can just run:
+#
+#     phone ui
+#     phone tap --x 540 --y 1200
+#     phone tap --text "Open"
+#     phone type "hello from the agent"
+#     phone swipe --x1 540 --y1 400 --x2 540 --y2 1700 --duration 400
+#     phone key home
+#     phone open com.whatsapp
+#     phone screenshot /data/local/tmp/screen.png
+#     phone shell am start -n com.android.settings/.Settings
+#
+# Falls back to fetching the helper from the repo if you want to install it
+# permanently:
+#     curl -fsSL -o /usr/local/bin/phone \
+#       https://raw.githubusercontent.com/techjarves/Mobile-Harness/main/scripts/phone \
+#       && chmod +x /usr/local/bin/phone
+set -euo pipefail
+
+HOST="${MH_PHONE_HOST:-127.0.0.1}"
+PORT="${MH_PHONE_PORT:-8765}"
+TOKEN="${MH_PHONE_TOKEN:-}"
+BASE="http://${HOST}:${PORT}"
+
+curl_req() { # extra args...
+  local -a args=("$@")
+  if [ -n "$TOKEN" ]; then
+    command curl --silent --show-error --max-time 240 -H "X-Access-Token: $TOKEN" "${args[@]}"
+  else
+    command curl --silent --show-error --max-time 240 "${args[@]}"
+  fi
+}
+
+json_str() { # quote as a JSON string literal
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+
+usage() {
+  cat <<EOF
+phone - drive the Android phone from the agent runtime
+
+  phone health                       server status
+  phone ui                           current UI tree (JSON)
+  phone apps                         installed launcher apps
+  phone screenshot <file.png>        save a PNG screenshot
+  phone tap --x 100 --y 200          tap at coordinates
+  phone tap --text "Open"            tap first visible element with text
+  phone tap --id "com.app:id/btn"    tap first visible element by resource id
+  phone longpress --x 100 --y 200 [--duration 600]
+  phone swipe --x1 0 --y1 300 --x2 0 --y2 1600 [--duration 300]
+  phone type "some text"             type into the focused field
+  phone key home|back|recents|notifications|quick_settings|power_dialog|lock_screen|screenshot
+  phone open com.example.app         launch an app by package
+  phone shell <command...>           run a command in the app's sandbox (am, dumpsys, ...)
+EOF
+}
+
+case "${1:-}" in
+  health) curl_req "$BASE/health" ;;
+  ui) curl_req "$BASE/ui" ;;
+  apps) curl_req "$BASE/apps" ;;
+
+  screenshot)
+    [ $# -ge 2 ] || { echo "usage: phone screenshot <file.png>" >&2; exit 2; }
+    out="$2"
+    raw="$(curl_req "$BASE/screenshot")"
+    b64="$(printf '%s' "$raw" | sed -n 's/.*"base64"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [ -z "$b64" ]; then printf '%s\n' "$raw" >&2; exit 1; fi
+    printf '%s' "$b64" | base64 -d > "$out"
+    echo "saved $out" ;;
+
+  tap)
+    x=""; y=""; text=""; id=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --x) x="$2"; shift 2 ;;
+        --y) y="$2"; shift 2 ;;
+        --text) text="$2"; shift 2 ;;
+        --id) id="$2"; shift 2 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+      esac
+    done
+    body="{"
+    if [ -n "$text" ]; then body+="\"text\":$(json_str "$text")"
+    elif [ -n "$id" ]; then body+="\"resourceId\":$(json_str "$id")"
+    elif [ -n "$x" ] && [ -n "$y" ]; then body+="\"x\":$x,\"y\":$y"
+    else echo "usage: phone tap --x <x> --y <y> | --text <text> | --id <resourceId>" >&2; exit 2
+    fi
+    body+="}"
+    curl_req -d "$body" -H "Content-Type: application/json" "$BASE/tap" ;;
+
+  longpress)
+    x=""; y=""; duration="600"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --x) x="$2"; shift 2 ;;
+        --y) y="$2"; shift 2 ;;
+        --duration) duration="$2"; shift 2 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+      esac
+    done
+    [ -n "$x" ] && [ -n "$y" ] || { echo "usage: phone longpress --x <x> --y <y> [--duration]" >&2; exit 2; }
+    curl_req -d "{\"x\":$x,\"y\":$y,\"durationMs\":$duration}" -H "Content-Type: application/json" "$BASE/longpress" ;;
+
+  swipe)
+    x1=""; y1=""; x2=""; y2=""; duration="300"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --x1) x1="$2"; shift 2 ;;
+        --y1) y1="$2"; shift 2 ;;
+        --x2) x2="$2"; shift 2 ;;
+        --y2) y2="$2"; shift 2 ;;
+        --duration) duration="$2"; shift 2 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+      esac
+    done
+    for v in "$x1" "$y1" "$x2" "$y2"; do
+      [ -n "$v" ] || { echo "usage: phone swipe --x1 --y1 --x2 --y2 [--duration]" >&2; exit 2; }
+    done
+    curl_req -d "{\"x1\":$x1,\"y1\":$y1,\"x2\":$x2,\"y2\":$y2,\"durationMs\":$duration}" \
+      -H "Content-Type: application/json" "$BASE/swipe" ;;
+
+  type)
+    [ $# -ge 2 ] || { echo "usage: phone type \"text\"" >&2; exit 2; }
+    shift
+    # rejoin remaining args so `phone type hello world` works
+    text="$*"
+    curl_req -d "{\"text\":$(json_str "$text")}" -H "Content-Type: application/json" "$BASE/type" ;;
+
+  key)
+    [ $# -ge 2 ] || { echo "usage: phone key home|back|recents|... " >&2; exit 2; }
+    curl_req -d "{\"key\":$(json_str "$2")}" -H "Content-Type: application/json" "$BASE/key" ;;
+
+  open)
+    [ $# -ge 2 ] || { echo "usage: phone open com.example.app" >&2; exit 2; }
+    curl_req -d "{\"package\":$(json_str "$2")}" -H "Content-Type: application/json" "$BASE/open" ;;
+
+  shell)
+    [ $# -ge 2 ] || { echo "usage: phone shell am start -n com.android.settings/.Settings" >&2; exit 2; }
+    shift
+    args=""
+    first=1
+    for a in "$@"; do
+      if [ $first -eq 1 ]; then args="$(json_str "$a")"; first=0
+      else args="$args,$(json_str "$a")"
+      fi
+    done
+    curl_req -d "{\"args\":[$args]}" -H "Content-Type: application/json" "$BASE/shell" ;;
+
+  help|-h|--help) usage ;;
+  *) echo "unknown command: ${1:-}" >&2; usage; exit 2 ;;
+esac

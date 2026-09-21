@@ -28,7 +28,11 @@ interface RuntimeBridge {
 
 object RuntimeLaunchConfigBuilder {
     fun build(profile: ProviderProfile, authToken: String? = null, localGatewayUrl: String? = null): RuntimeLaunchConfig {
-        val environment = linkedMapOf("DISABLE_AUTOUPDATER" to "1")
+        val environment = linkedMapOf<String, String>("DISABLE_AUTOUPDATER" to "1")
+        // Agent phone-control: expose the loopback control server to every child
+        // process (including the claude CLI and its shell tool) so the `phone`
+        // helper can reach it without further configuration.
+        com.jarves.mh.control.PhoneControlRuntime.inject(environment)
         when (profile.kind.protocol) {
             com.jarves.mh.model.ProviderProtocol.CLAUDE_LOGIN -> {
                 require(!authToken.isNullOrBlank()) { "Enter a Claude subscription token first" }
