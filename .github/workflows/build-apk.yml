@@ -44,6 +44,9 @@ jobs:
             "build-tools;36.0.0" \
             "ndk;26.1.10909125" \
             "cmake;3.22.1" > /dev/null
+          # GitHub runners preinstall an SDK and export ANDROID_HOME; point both
+          # variables at OUR sdk dir so AGP sees exactly one SDK location.
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Download runtime bundles (dist/runtime-bundles)
